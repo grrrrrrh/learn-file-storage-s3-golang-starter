@@ -36,7 +36,7 @@ func (c Client) GetVideos(userID uuid.UUID) ([]Video, error) {
 		user_id
 	FROM videos
 	WHERE user_id = ?
-	ORDER BY created_at DESC
+	ORDER BY created_at DESC, id DESC
 	`
 
 	rows, err := c.db.Query(query, userID)
@@ -82,7 +82,6 @@ func (c Client) CreateVideo(params CreateVideoParams) (Video, error) {
 	if err != nil {
 		return Video{}, err
 	}
-
 	return c.GetVideo(id)
 }
 
@@ -125,6 +124,7 @@ func (c Client) UpdateVideo(video Video) error {
 	query := `
 	UPDATE videos
 	SET
+		updated_at = CURRENT_TIMESTAMP,
 		title = ?,
 		description = ?,
 		thumbnail_url = ?,
@@ -137,8 +137,8 @@ func (c Client) UpdateVideo(video Video) error {
 		query,
 		video.Title,
 		video.Description,
-		&video.ThumbnailURL,
-		&video.VideoURL,
+		video.ThumbnailURL,
+		video.VideoURL,
 		video.UserID,
 		video.ID,
 	)
@@ -151,5 +151,16 @@ func (c Client) DeleteVideo(id uuid.UUID) error {
 	WHERE id = ?
 	`
 	_, err := c.db.Exec(query, id)
+	return err
+}
+func (c Client) UpdateVideoURL(videoID uuid.UUID, videoURL string) error {
+	query := `
+	UPDATE videos
+	SET
+		updated_at = CURRENT_TIMESTAMP,
+		video_url = ?
+	WHERE id = ?
+	`
+	_, err := c.db.Exec(query, videoURL, videoID)
 	return err
 }

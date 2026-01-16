@@ -3,3 +3,13 @@ out
 .env
 assets/
 samples/
+
+# Don't commit installers / binaries
+awscliv2.zip
+aws/
+
+# Don't commit local env/secrets
+.env
+
+# Don't commit local DB files
+*.db

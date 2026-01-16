@@ -7,19 +7,18 @@ import (
 )
 
 func processVideoForFastStart(filePath string) (string, error) {
-	// output should be: "<tempfile>.processing"
-	outputPath := filePath + ".processing"
+	outputPath := filePath + ".faststart.mp4"
 
 	cmd := exec.Command(
 		"ffmpeg",
+		"-y", // overwrite if exists
 		"-i", filePath,
 		"-c", "copy",
-		"-movflags", "faststart",
+		"-movflags", "+faststart",
 		"-f", "mp4",
 		outputPath,
 	)
 
-	// capture stderr to make ffmpeg errors readable
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

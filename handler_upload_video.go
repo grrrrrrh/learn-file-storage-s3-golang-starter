@@ -8,12 +8,12 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
-	// 🔧 CHANGE these to your actual module paths
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 )
 
@@ -55,7 +55,6 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	// 5) Parse uploaded file from form data: key "video"
 	videoFile, videoHeader, err := r.FormFile("video")
 	if err != nil {
-		// If body is too large, FormFile/ParseMultipartForm often errors out here.
 		respondWithError(w, http.StatusBadRequest, "could not read uploaded file", err)
 		return
 	}
@@ -79,17 +78,38 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "could not create temp file", err)
 		return
 	}
-	defer tempFile.Close()
-	defer os.Remove(tempFile.Name())
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
 
 	if _, err := io.Copy(tempFile, videoFile); err != nil {
+		_ = tempFile.Close()
 		respondWithError(w, http.StatusInternalServerError, "could not write temp file", err)
 		return
 	}
-	// after io.Copy(...) succeeded
 
-	// Detect aspect ratio using ffprobe on the temp file path
-	aspect, err := getVideoAspectRatio(tempFile.Name())
+	// ✅ CLOSE so ffmpeg can read it properly
+	if err := tempFile.Close(); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not close temp file", err)
+		return
+	}
+
+	// ✅ Process video for fast start
+	processedPath, err := processVideoForFastStart(tempPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not process video for fast start", err)
+		return
+	}
+	defer os.Remove(processedPath)
+
+	processedFile, err := os.Open(processedPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not open processed video", err)
+		return
+	}
+	defer processedFile.Close()
+
+	// ✅ Aspect ratio check
+	aspect, err := getVideoAspectRatio(processedPath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not detect aspect ratio", err)
 		return
@@ -103,36 +123,29 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		prefix = "portrait"
 	}
 
-	// rewind again just to be safe (ffprobe doesn’t move pointer, but harmless)
-	_, err = tempFile.Seek(0, io.SeekStart)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not rewind temp file", err)
-		return
-	}
-
 	hexKey, err := randomHex32()
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not generate key", err)
 		return
 	}
 
-	// ✅ key now includes the prefix "folder"
+	key := fmt.Sprintf("%s/%s.mp4", prefix, hexKey)
 
-	// 9) Put object into S3
-	key := fmt.Sprintf("%s/%s.mp4", prefix, hexKey) // hexKey is 64 hex chars (32 random bytes)
+	// ✅ Upload processed file to S3 (ONLY ONCE)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(key),
-		Body:        tempFile,
-		ContentType: aws.String(mediaType),
+		Body:        processedFile,
+		ContentType: aws.String("video/mp4"),
 	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not upload to s3", err)
 		return
 	}
 
-	// 10) Update video_url in DB
-	videoURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+	// ✅ Store a REAL URL again (CloudFront URL)
+	cfBase := strings.TrimRight(cfg.s3CfDistribution, "/")
+	videoURL := fmt.Sprintf("%s/%s", cfBase, key)
 
 	err = cfg.db.UpdateVideoURL(videoID, videoURL)
 	if err != nil {
@@ -145,7 +158,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// randomHex32 returns 32 hex characters (16 random bytes).
+// randomHex32 returns 64 hex characters (32 random bytes).
 func randomHex32() (string, error) {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
